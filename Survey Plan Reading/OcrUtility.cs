@@ -6,66 +6,56 @@ namespace Survey_Plan_Reading
 {
     public static class OcrUtility
     {
-        // Matches distances like '204.7' or '77.21'
-        private static readonly Regex DistanceRegex = new Regex(@"\b(\d+(\.\d+)?)\b");
+        // Distance: Matches decimals like 204.7, 77.21. 
+        // Also handles comma as decimal separator and optional "Dist/L" prefixes.
+        private static readonly Regex DistanceRegex = new Regex(@"(?:Dist|L|Length)?[:=]?\s*(\d+[.,]\d+)\b", RegexOptions.IgnoreCase);
 
-        // Matches bearings like '270', '90', or common OCR errors like '2700', '270o', '270°'
-        // This regex looks for 1-3 digits followed by a symbol that might be the degree mark.
-        private static readonly Regex BearingRegex = new Regex(@"\b(\d{1,3})([0o°]?)\b");
+        // Bearing: Highly flexible DMS pattern
+        // Group 1: Degrees, Group 2: Minutes (optional), Group 3: Seconds (optional)
+        // Handles mistakes like '0' or 'o' for degrees, and 'l' or '1' for minutes/seconds.
+        private static readonly Regex BearingRegex = new Regex(@"(\d{1,3})[\s°0oO]*\s*(?:(\d{1,2})[\s'’l1]*\s*)?(?:(\d{1,2})[\s""'’l1]{0,2})?", RegexOptions.IgnoreCase);
 
-        /// <summary>
-        /// Parses survey plan text to identify distances.
-        /// </summary>
         public static List<double> ParseDistances(string text)
         {
             var distances = new List<double>();
-            var matches = DistanceRegex.Matches(text);
-
-            foreach (Match match in matches)
+            foreach (Match match in DistanceRegex.Matches(text))
             {
-                if (double.TryParse(match.Value, out double distance))
+                string val = match.Groups[1].Value.Replace(',', '.');
+                if (double.TryParse(val, out double d))
+                    distances.Add(d);
+            }
+            // Fallback: If no "prefixed" distance found, just look for any decimal
+            if (distances.Count == 0)
+            {
+                var fallbackRegex = new Regex(@"\b(\d+\.\d+)\b");
+                foreach (Match match in fallbackRegex.Matches(text))
                 {
-                    distances.Add(distance);
+                    if (double.TryParse(match.Value, out double d))
+                        distances.Add(d);
                 }
             }
-
             return distances;
         }
 
-        /// <summary>
-        /// Parses survey plan text to identify bearings, cleaning OCR errors.
-        /// </summary>
-        public static List<double> ParseBearings(string text)
+        public static List<(double D, double M, double S)> ParseDmsBearings(string text)
         {
-            var bearings = new List<double>();
-            var matches = BearingRegex.Matches(text);
-
-            foreach (Match match in matches)
+            var bearings = new List<(double, double, double)>();
+            foreach (Match match in BearingRegex.Matches(text))
             {
-                string value = match.Groups[1].Value;
-                if (double.TryParse(value, out double bearing))
+                double d = double.Parse(match.Groups[1].Value);
+                double m = 0;
+                double s = 0;
+
+                if (match.Groups[2].Success) double.TryParse(match.Groups[2].Value, out m);
+                if (match.Groups[3].Success) double.TryParse(match.Groups[3].Value, out s);
+
+                // Basic validation for a bearing
+                if (d >= 0 && d <= 360)
                 {
-                    // Basic validation: bearings are typically 0-360
-                    if (bearing >= 0 && bearing <= 360)
-                    {
-                        bearings.Add(bearing);
-                    }
+                    bearings.Add((d, m, s));
                 }
             }
-
             return bearings;
-        }
-
-        /// <summary>
-        /// Cleans a specific OCR string where the degree symbol might be misinterpreted.
-        /// </summary>
-        public static string CleanOcrError(string input)
-        {
-            if (string.IsNullOrEmpty(input)) return string.Empty;
-
-            // Replace 'o' or '0' at the end of a suspected bearing with '°' if it seems appropriate
-            // Or just remove them to get the raw numeric value.
-            return Regex.Replace(input, @"(\d{1,3})[0o]$","$1°");
         }
     }
 }
