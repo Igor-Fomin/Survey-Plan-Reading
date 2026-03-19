@@ -42,8 +42,14 @@ namespace Survey_Plan_Reading
 
             try
             {
-                System.Windows.Point screenPt1 = ed.PointToScreen(p1, 1);
-                System.Windows.Point screenPt2 = ed.PointToScreen(p2, 1);
+                ed.WriteMessage("\nProcessing area...");
+
+                // 1. Wait for AutoCAD selection box/crosshairs to clear
+                await Task.Delay(200);
+
+                // Use visual coordinate conversion (2) which is often more reliable for screen capture
+                System.Windows.Point screenPt1 = ed.PointToScreen(p1, 2);
+                System.Windows.Point screenPt2 = ed.PointToScreen(p2, 2);
 
                 Autodesk.AutoCAD.Geometry.Point3d cap1 = new Autodesk.AutoCAD.Geometry.Point3d(screenPt1.X, screenPt1.Y, 0);
                 Autodesk.AutoCAD.Geometry.Point3d cap2 = new Autodesk.AutoCAD.Geometry.Point3d(screenPt2.X, screenPt2.Y, 0);
@@ -51,11 +57,16 @@ namespace Survey_Plan_Reading
                 using (System.Drawing.Bitmap rawBmp = ScreenCaptureUtility.CaptureArea(cap1, cap2))
                 using (System.Drawing.Bitmap processedBmp = ScreenCaptureUtility.PreProcessImage(rawBmp))
                 {
-                    string recognizedText = PerformPaddleOcr(processedBmp);
+                    // 2. Debug: Save processed image to Temp folder
+                    string debugPath = Path.Combine(Path.GetTempPath(), "ocr_debug.png");
+                    processedBmp.Save(debugPath, System.Drawing.Imaging.ImageFormat.Png);
+                    ed.WriteMessage($"\nDebug: Image saved to {debugPath}");
+
+                    string recognizedText = PerformPaddleOcr(processedBmp, ed);
                     
                     if (string.IsNullOrWhiteSpace(recognizedText))
                     {
-                        ed.WriteMessage("\nOCR Error: No text found.");
+                        ed.WriteMessage("\nOCR Error: No text found. The capture might be empty or too blurry.");
                         return;
                     }
                     
@@ -66,7 +77,8 @@ namespace Survey_Plan_Reading
 
                     if (!distances.Any() || !bearings.Any())
                     {
-                        ed.WriteMessage("\nFailed to extract valid distance and bearing.");
+                        ed.WriteMessage("\nFailed to extract valid distance and bearing from OCR text.");
+                        ed.WriteMessage($"\nFound {distances.Count} distances and {bearings.Count} bearings.");
                         return;
                     }
 
@@ -98,21 +110,32 @@ namespace Survey_Plan_Reading
             }
             catch (System.Exception ex)
             {
-                ed.WriteMessage($"\nError during extraction: {ex.Message}");
+                ed.WriteMessage($"\nCRITICAL ERROR: {ex.Message}");
+                ed.WriteMessage($"\nSTACK TRACE: {ex.StackTrace}");
             }
         }
 
-        private string PerformPaddleOcr(System.Drawing.Bitmap bmp)
+        private string PerformPaddleOcr(System.Drawing.Bitmap bmp, Editor ed)
         {
-            // PaddleOCR initialization - Uses LocalFullModels.EnglishV3
-            using (Mat mat = bmp.ToMat())
-            using (PaddleOcrAll all = new PaddleOcrAll(LocalFullModels.EnglishV3)
+            try
             {
-                AllowRotateDetection = true,
-            })
+                // PaddleOCR initialization - Uses LocalFullModels.EnglishV3
+                using (Mat mat = bmp.ToMat())
+                using (PaddleOcrAll all = new PaddleOcrAll(LocalFullModels.EnglishV3)
+                {
+                    AllowRotateDetection = true,
+                })
+                {
+                    PaddleOcrResult result = all.Run(mat);
+                    return result.Text;
+                }
+            }
+            catch (System.Exception ex)
             {
-                PaddleOcrResult result = all.Run(mat);
-                return result.Text;
+                ed.WriteMessage($"\nOCR Engine Error: {ex.Message}");
+                if (ex.InnerException != null)
+                    ed.WriteMessage($"\nInner Error: {ex.InnerException.Message}");
+                return string.Empty;
             }
         }
     }
